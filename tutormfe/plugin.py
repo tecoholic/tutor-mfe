@@ -28,6 +28,7 @@ config = {
         "COMMON_VERSION": "{{ OPENEDX_COMMON_VERSION }}",
         "CADDY_DOCKER_IMAGE": "{{ DOCKER_IMAGE_CADDY }}",
         "HOST_EXTRA_FILES": False,
+        "DEV_MODE": [],
     },
 }
 
@@ -98,9 +99,10 @@ def get_mfes() -> dict[str, MFE_ATTRS_TYPE]:
 class MFEMountData:
     """Stores categorized mounted and unmounted MFEs."""
 
-    def __init__(self, mounts: list[str]):
+    def __init__(self, mounts: list[str], dev_mode_apps: list[str] | None = None):
         self.mounted: list[tuple[str, MFE_ATTRS_TYPE, list[str]]] = []
         self.unmounted: list[tuple[str, MFE_ATTRS_TYPE]] = []
+        self.dev_mode_apps = dev_mode_apps or []
         self._categorize_mfes(mounts)
 
     def _categorize_mfes(self, mounts: list[str]) -> None:
@@ -111,6 +113,22 @@ class MFEMountData:
                 self.mounted.append((app_name, app, mfe_mounts))
             else:
                 self.unmounted.append((app_name, app))
+
+    def get_dev_mode_services(
+        self,
+    ) -> t.Iterable[tuple[str, MFE_ATTRS_TYPE, list[str]]]:
+        """
+        Yield MFEs that should run in dev mode, with their mounts.
+        Includes both mounted MFEs and unmounted MFEs explicitly configured for dev mode.
+        """
+        # Already mounted MFEs are always in dev mode
+        for app_name, app, mounts in self.mounted:
+            yield app_name, app, mounts
+
+        # Additionally, include unmounted MFEs that are in MFE_DEV_MODE config
+        for app_name, app in self.unmounted:
+            if app_name in self.dev_mode_apps:
+                yield app_name, app, []
 
 
 @tutor_hooks.lru_cache
@@ -183,21 +201,28 @@ tutor_hooks.Filters.IMAGES_PUSH.add_item(
 
 
 # Build, pull and push {mfe}-dev images
-@tutor_hooks.Actions.PLUGINS_LOADED.add()
-def _mounted_mfe_image_management() -> None:
+@tutor_hooks.Actions.CONFIG_LOADED.add()
+def _configure_dev_mode_images(config: Config) -> None:
+    """Build dev images for mounted MFEs and MFEs in dev mode."""
+    dev_mode_apps = get_typed(config, "MFE_DEV_MODE", list, [])
+
     for mfe_name, _mfe_attrs in iter_mfes():
-        name = f"{mfe_name}-dev"
-        tag = "{{ MFE_DOCKER_IMAGE_DEV_PREFIX }}-" + name + ":{{ MFE_VERSION }}"
-        tutor_hooks.Filters.IMAGES_BUILD.add_item(
-            (
-                name,
-                os.path.join("plugins", "mfe", "build", "mfe"),
-                tag,
-                (f"--target={mfe_name}-dev",),
+        # Build dev image if:
+        # 1. In main mode (always), OR
+        # 2. In dev mode AND either mounted OR in MFE_DEV_MODE config
+        if __version_suffix__ or mfe_name in dev_mode_apps:
+            name = f"{mfe_name}-dev"
+            tag = "{{ MFE_DOCKER_IMAGE_DEV_PREFIX }}-" + name + ":{{ MFE_VERSION }}"
+            tutor_hooks.Filters.IMAGES_BUILD.add_item(
+                (
+                    name,
+                    os.path.join("plugins", "mfe", "build", "mfe"),
+                    tag,
+                    (f"--target={mfe_name}-dev",),
+                )
             )
-        )
-        tutor_hooks.Filters.IMAGES_PULL.add_item((name, tag))
-        tutor_hooks.Filters.IMAGES_PUSH.add_item((name, tag))
+            tutor_hooks.Filters.IMAGES_PULL.add_item((name, tag))
+            tutor_hooks.Filters.IMAGES_PUSH.add_item((name, tag))
 
 
 # init script
@@ -265,7 +290,7 @@ def _print_mfe_public_hosts(
 
 
 @tutor_hooks.Filters.IMAGES_BUILD_REQUIRED.add()
-def _build_3rd_party_dev_mfes_on_launch(
+def _build_dev_images_on_launch(
     image_names: list[str], context_name: t.Literal["local", "dev"]
 ) -> list[str]:
     if __version_suffix__:
@@ -273,12 +298,12 @@ def _build_3rd_party_dev_mfes_on_launch(
         image_names.append("mfe")
 
     for mfe_name, _mfe_attrs in iter_mfes():
-        if __version_suffix__ or (
-            context_name == "dev" and mfe_name not in CORE_MFE_APPS
-        ):
-            # We build MFE images:
-            # - in main
-            # - in development for non-core apps
+        # Only add dev image to build requirement if it was registered in _configure_dev_mode_images
+        # This happens when:
+        # - In main mode (all dev images)
+        # - In dev mode and MFE is in MFE_DEV_MODE config
+        # (The actual decision is already made in _configure_dev_mode_images via IMAGES_BUILD filter)
+        if __version_suffix__:
             image_names.append(f"{mfe_name}-dev")
     return image_names
 

@@ -1,7 +1,7 @@
-{%- set mfe_data = MFEMountData(MOUNTS) %}
+{%- set mfe_data = MFEMountData(MOUNTS, MFE_DEV_MODE) %}
 
-{%- for app_name, app, mounts in mfe_data.mounted %}
-{{ app_name }}: # Work on this MFE for development
+{%- for app_name, app, mounts in mfe_data.get_dev_mode_services() %}
+{{ app_name }}: # Development service for {{ app_name }}
     image: "{{ MFE_DOCKER_IMAGE_DEV_PREFIX }}-{{ app_name }}-dev:{{ MFE_VERSION }}"
     ports:
         - "{{ app["port"] }}:{{ app["port"] }}"
@@ -20,13 +20,16 @@
 {%- endfor %}
 
 
-{% if mfe_data.unmounted|length > 0 or MFE_HOST_EXTRA_FILES %}
-mfe:
-   ports:
+{%- set other_unmounted = [app for app, _ in mfe_data.unmounted if app not in MFE_DEV_MODE] %}
+{% if other_unmounted|length > 0 or MFE_HOST_EXTRA_FILES %}
+mfe: # Shared service for MFEs not in dev mode
+    ports:
 {%- if MFE_HOST_EXTRA_FILES %}
-       - 8002:8002
+        - 8002:8002
 {%- endif %}
-       {%- for app_name, app in mfe_data.unmounted %}
-       - {{ app["port"] }}:8002 # {{ app_name }}
-       {%- endfor %}
+        {%- for app_name, app in mfe_data.unmounted %}
+        {%- if app_name not in MFE_DEV_MODE %}
+        - {{ app["port"] }}:8002 # {{ app_name }}
+        {%- endif %}
+        {%- endfor %}
 {% endif %}

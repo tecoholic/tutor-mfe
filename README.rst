@@ -599,13 +599,24 @@ In some cases, for example when using `GitLab's NPM package registry <https://do
 MFE development
 ---------------
 
-Tutor makes it possible to run any MFE in development mode. For instance, to run the "profile" MFE::
+Running MFEs in Development Mode
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Tutor makes it possible to run any MFE in development mode as an individual service. To enable development mode for specific MFEs, configure the ``MFE_DEV_MODE`` setting with a list of MFE names::
+
+    tutor config save --set MFE_DEV_MODE='["profile", "authn", "learning"]'
+
+Then launch your environment::
+
+    tutor dev launch
+
+The configured MFEs will now have individual services that can be started separately::
 
     tutor dev start profile
 
 Then, access http://apps.local.openedx.io:1995/profile/u/YOURUSERNAME
 
-You can also bind-mount your own fork of an MFE. For example::
+By default, MFEs in dev mode use pre-built images without hot-reload. To enable hot-reload for an MFE, you can optionally bind-mount your own fork of the repository::
 
     tutor mounts add /path/to/frontend-app-profile
     tutor dev launch
@@ -616,13 +627,17 @@ You can also bind-mount your own fork of an MFE. For example::
 
 With this change, the "profile-dev" image will be automatically re-built during ``launch``. Your host repository will then be bind-mounted at runtime in the "profile" container. This means that changes you make to the host repository will be automatically picked up and hot-reloaded by your development server.
 
-This works for custom MFEs, as well. For example, if you added your own MFE named frontend-app-myapp, then you can bind-mount it like so::
+MFEs not in ``MFE_DEV_MODE`` will continue to use the shared ``mfe`` service and will be accessible at ``http://apps.local.openedx.io:8002/<mfe-name>``.
 
+This works for custom MFEs as well. For example, if you added your own MFE named frontend-app-myapp, you can add it to dev mode and optionally bind-mount it::
+
+    tutor config save --set MFE_DEV_MODE='["profile", "myapp"]'
     tutor mounts add /path/to/frontend-app-myapp
+    tutor dev launch
 
 .. note::
 
-  Docker tries to run as many build processes in parallel as possible, but this can cause failures in the MFE image build.  If you're running into OOM issues, RAM starvation, or network failures during NPM installs, try the following before restarting::
+  Docker tries to run as many build processes in parallel as possible, but this can cause failures in the MFE image build. If you're running into OOM issues, RAM starvation, or network failures during NPM installs, try the following before restarting::
 
     cat >buildkitd.toml <<EOF
     [worker.oci]
